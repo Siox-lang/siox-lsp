@@ -1,0 +1,3 @@
+[submodule "sioxc"]
+	path = sioxc
+	url = git@github.com:Siox-lang/sioxc.git

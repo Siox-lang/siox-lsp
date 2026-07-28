@@ -1,12 +1,12 @@
 [package]
 name = "siox-lsp"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
-authors.workspace = true
-description = "The siox language server (skeleton)"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Siox-lang/siox-lsp"
+authors = ["siox contributors"]
+description = "Language Server Protocol implementation for siox"
 
 [[bin]]
 name = "siox-lsp"
@@ -16,4 +16,4 @@ path = "src/main.rs"
 # The language server needs only the backend-independent core (frontend +
 # IR/lints for diagnostics), never the LLVM backend — so this crate does NOT
 # depend on `siox-llvm`, and building it needs no LLVM toolchain.
-siox.workspace = true
+siox = { path = "sioxc" }
