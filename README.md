@@ -3,10 +3,11 @@
 Language Server Protocol implementation for
 [siox](https://github.com/Siox-lang/sioxc).
 
-The compiler is pinned as the `sioxc/` Git submodule. Clone and build with:
+The backend-independent compiler core is fetched directly by Cargo from the
+`sioxc` Git repository:
 
 ```bash
-git clone --recurse-submodules git@github.com:Siox-lang/siox-lsp.git
+git clone git@github.com:Siox-lang/siox-lsp.git
 cd siox-lsp
 cargo build
 ```
@@ -14,13 +15,8 @@ cargo build
 Run over standard input/output:
 
 ```bash
-target/debug/siox-lsp --stdio --std sioxc/std
+target/debug/siox-lsp --stdio --std /path/to/sioxc/std
 ```
 
-Update the compiler dependency explicitly:
-
-```bash
-git -C sioxc fetch
-git -C sioxc checkout <compiler-commit>
-git add sioxc
-```
+`--std` points at the SIOX standard-library installation or a `sioxc`
+checkout. `Cargo.lock` pins the exact compiler revision used by this LSP build.
