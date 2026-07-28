@@ -16,4 +16,4 @@ path = "src/main.rs"
 # The language server needs only the backend-independent core (frontend +
 # IR/lints for diagnostics), never the LLVM backend — so this crate does NOT
 # depend on `siox-llvm`, and building it needs no LLVM toolchain.
-siox = { git = "https://github.com/Siox-lang/sioxc.git" }
+siox = { git = "https://github.com/Siox-lang/sioxc.git", default-features = false }

@@ -5,7 +5,7 @@ version = 4
 [[package]]
 name = "siox"
 version = "0.1.0"
-source = "git+https://github.com/Siox-lang/sioxc.git#bbaefe5e126ee93bd0de7d6215a65a2cbcaf09e5"
+source = "git+https://github.com/Siox-lang/sioxc.git#2c29dac87e2f8ec3c4a937d2c4be0435d75dd803"
 
 [[package]]
 name = "siox-lsp"
