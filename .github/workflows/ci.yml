@@ -1,0 +1,23 @@
+name: LSP
+on: [push, pull_request]
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    env:
+      SIOX_STD: /tmp/siox-lsp-compiler/std
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.90
+        with:
+          components: rustfmt, clippy
+      - name: Retrieve matching language libraries
+        run: |
+          rev=$(sed -n 's@source = "git+https://github.com/Siox-lang/sioxc.git#\(.*\)"@\1@p' Cargo.lock)
+          test -n "$rev"
+          git init /tmp/siox-lsp-compiler
+          git -C /tmp/siox-lsp-compiler fetch --depth=1 https://github.com/Siox-lang/sioxc.git "$rev"
+          git -C /tmp/siox-lsp-compiler checkout --detach FETCH_HEAD
+      - run: cargo fmt --check
+      - run: cargo test --locked
+      - run: cargo clippy --locked --all-targets -- -D warnings

@@ -1,35 +1,27 @@
-//! `siox-lsp` — the siox language server.
-//!
-//! Skeleton only: it accepts the invocation the docs describe
-//! (`siox-lsp --stdio --std <dir>`) and exits reporting that the server is not
-//! yet implemented. The real server will speak LSP over stdin/stdout and reuse
-//! the `siox` library's frontend (`siox::syntax` → `siox::types`) to publish
-//! live diagnostics; see `docs/interoperability.md` for the intended surface.
+//! Compiler-backed siox language server. Stdout belongs exclusively to LSP.
 
-use std::process::ExitCode;
+mod analysis;
+mod protocol;
+mod server;
+mod text;
+
+use std::{io, path::PathBuf, process::ExitCode};
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-
-    // Minimal argument handling so the documented invocation is accepted.
-    let mut stdio = false;
-    let mut std_dir = String::from("./std");
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--stdio" => stdio = true,
-            "--std" => {
-                i += 1;
-                match args.get(i) {
-                    Some(dir) => std_dir = dir.clone(),
-                    None => {
-                        eprintln!("siox-lsp: --std needs a directory");
-                        return ExitCode::from(2);
-                    }
+    let mut args = std::env::args().skip(1);
+    let mut std_root = PathBuf::from("./std");
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--stdio" => {}
+            "--std" => match args.next() {
+                Some(path) => std_root = path.into(),
+                None => {
+                    eprintln!("siox-lsp: --std needs a directory");
+                    return ExitCode::from(2);
                 }
-            }
+            },
             "-h" | "--help" => {
-                println!("siox-lsp — the siox language server\n\nUSAGE:\n    siox-lsp --stdio [--std <dir>]\n");
+                println!("siox-lsp\n\nUSAGE: siox-lsp [--stdio] [--std <dir>]\n\nRequires matching core/ and std/ compiler libraries; no LLVM is needed.");
                 return ExitCode::SUCCESS;
             }
             other => {
@@ -37,15 +29,17 @@ fn main() -> ExitCode {
                 return ExitCode::from(2);
             }
         }
-        i += 1;
     }
-
-    let _ = (stdio, std_dir);
-    // The backend-independent frontend is linked and ready — this is what the
-    // server will drive (parse → resolve → type-check → lints) to publish
-    // diagnostics. It pulls in no LLVM backend. The LSP protocol layer over
-    // stdio is not built yet.
-    let _frontend = siox::diag::DiagnosticSink::new();
-    eprintln!("siox-lsp: not yet implemented (frontend linked, no LLVM backend)");
-    ExitCode::from(69) // EX_UNAVAILABLE
+    if std_root.join("std/prelude.siox").is_file() {
+        std_root = std_root.join("std");
+    }
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+    match server::Server::new(std_root).run(&mut stdin.lock(), &mut stdout.lock()) {
+        Ok(code) => ExitCode::from(code),
+        Err(error) => {
+            eprintln!("siox-lsp: {error}");
+            ExitCode::FAILURE
+        }
+    }
 }

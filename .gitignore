@@ -1,1 +1,4 @@
 /target/
+/graphify-out/
+/editors/vscode/node_modules/
+/editors/vscode/.vscode-test/
