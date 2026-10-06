@@ -74,3 +74,30 @@ completion, outlines, and safe/idempotent formatting. These tests use direct LSP
 sessions, not editor plugins or GUI automation. Editor-specific packaging and
 validation are outside this server-only delivery. CI retrieves libraries at the
 exact compiler commit from `Cargo.lock`; no LLVM installation is needed.
+
+To exercise the server against the existing design corpus (no source copies or
+on-disk edits), run the opt-in project tests:
+
+```bash
+# Defaults to the sibling ../siox-tests checkout.
+export SIOX_CORPUS=/path/to/siox-tests
+cargo test --locked --test stdio real_ -- --ignored --nocapture --test-threads=1
+```
+
+These compare diagnostic codes, severities and ranges with the locked compiler
+for every root `.siox` file, check outlines and closing documents, and report
+compiler metadata failures separately. Eight designs—FIFO, SPI, SPI/I²C trait
+buses, views, UART, RISC-V ALU/decoder and a multi-file namespace example—also
+exercise navigation, hover, references, completion, comment-safe formatting,
+unsaved error/repair and eight simultaneous open buffers. This tests analysis
+and protocol behavior, not native simulation or editor integration. On the
+shared development host, launch the command through the compiler checkout's
+`scripts/guarded-run.sh` resource guard.
+
+The 2026-10-06 run checked all 225 corpus files and the eight deeper design
+sessions. Diagnostic parity passed, but metadata analysis reported E-P017 for
+`generic_standalone_test.siox`; this is an upstream analysis-path limitation,
+not a clean-analysis pass for that file. The project run also exposed missing
+keyword completion immediately after UART's leading comment ending in `.`.
+Both findings are tracked in [TODO.md](TODO.md); the tests print them separately
+from the passing protocol checks.

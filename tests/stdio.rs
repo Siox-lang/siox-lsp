@@ -1,12 +1,14 @@
 //! Spawn the real binary, exercise JSON-RPC framing and compiler-backed results.
 
 use serde_json::{json, Value};
+use siox::compiler::{CompileRequest, Compiler, Emit, SourceInput};
+use siox::diag::Severity;
 use std::{
     io::{BufRead, BufReader, Read, Write},
     path::PathBuf,
     process::{Child, ChildStdin, Command, Stdio},
     sync::mpsc::{self, Receiver},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use url::Url;
 
@@ -121,6 +123,14 @@ impl Client {
             }
         }
     }
+    fn diagnostics_version(&self, uri: &str, version: i32) -> Value {
+        loop {
+            let diagnostics = self.diagnostics(uri);
+            if diagnostics["version"] == version {
+                return diagnostics;
+            }
+        }
+    }
     fn open(&mut self, uri: &str, source: &str) -> Value {
         self.notify(
             "textDocument/didOpen",
@@ -160,6 +170,298 @@ fn errors(diagnostics: &Value) -> Vec<&Value> {
         .iter()
         .filter(|d| d["severity"] == 1)
         .collect()
+}
+
+fn corpus_root() -> PathBuf {
+    std::env::var_os("SIOX_CORPUS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../siox-tests"))
+        .canonicalize()
+        .expect("set SIOX_CORPUS to an existing siox-tests checkout")
+}
+
+fn diagnostic_keys(diagnostics: &Value) -> Vec<String> {
+    let mut keys: Vec<_> = diagnostics["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| json!([d["code"], d["severity"], d["range"]]).to_string())
+        .collect();
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+#[test]
+#[ignore = "requires an existing siox-tests checkout; never modifies project files"]
+fn real_corpus_diagnostic_parity() {
+    let mut paths: Vec<_> = std::fs::read_dir(corpus_root())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "siox"))
+        .collect();
+    paths.sort();
+    assert!(!paths.is_empty());
+    let compiler = Compiler::new(std_root());
+    let mut client = Client::new();
+    client.initialize();
+    let started = Instant::now();
+    let mut metadata_failures = Vec::new();
+    for path in &paths {
+        let source = std::fs::read_to_string(path).unwrap();
+        let uri = Url::from_file_path(path).unwrap().to_string();
+        let compilation = compiler.compile(CompileRequest::new(
+            SourceInput::memory(path, &source),
+            Emit::Metadata,
+        ));
+        if !compilation.succeeded() {
+            metadata_failures.push(path.file_name().unwrap().to_string_lossy().into_owned());
+            eprintln!(
+                "metadata limitation: {}: {}",
+                path.display(),
+                compilation.render_diagnostics()
+            );
+        }
+        let mut expected: Vec<_> = compilation.diagnostics().iter()
+            .filter(|d| d.primary.is_none_or(|s| Some(s.file) == compilation.entry_file))
+            .map(|d| {
+                let range = d.primary.map_or_else(
+                    || json!({"start":at(&source,0),"end":at(&source,0)}),
+                    |s| json!({"start":at(&source,s.start as usize),"end":at(&source,s.end as usize)}),
+                );
+                let severity = match d.severity {
+                    Severity::Error => 1, Severity::Warning => 2, Severity::Note => 3, Severity::Help => 4,
+                };
+                json!([d.code, severity, range]).to_string()
+            }).collect();
+        expected.sort();
+        expected.dedup();
+        if compilation.failure.is_some() {
+            expected
+                .push(json!([null, 1, {"start":at(&source,0),"end":at(&source,0)}]).to_string());
+            expected.sort();
+            expected.dedup();
+        }
+        let diagnostics = client.open(&uri, &source);
+        assert_eq!(
+            diagnostic_keys(&diagnostics),
+            expected,
+            "{}",
+            path.display()
+        );
+        assert!(client.request(
+            "textDocument/documentSymbol",
+            json!({"textDocument":{"uri":uri}})
+        )["result"]
+            .is_array());
+        client.notify("textDocument/didClose", json!({"textDocument":{"uri":uri}}));
+        assert_eq!(client.diagnostics(&uri)["diagnostics"], json!([]));
+        assert_eq!(std::fs::read_to_string(path).unwrap(), source);
+    }
+    client.finish();
+    eprintln!(
+        "corpus: {} files passed compiler diagnostic parity, outlines and close; {} metadata failures: {:?}; elapsed {:?}",
+        paths.len(),
+        metadata_failures.len(),
+        metadata_failures,
+        started.elapsed()
+    );
+}
+
+#[test]
+#[ignore = "requires an existing siox-tests checkout; never modifies project files"]
+fn real_projects_features_and_unsaved_edits() {
+    let root = corpus_root();
+    let compiler = Compiler::new(std_root());
+    let mut client = Client::new();
+    client.initialize();
+    let mut opened = Vec::new();
+    for (file, name) in [
+        ("fifo_test.siox", "Fifo"),
+        ("spi_test.siox", "SpiMaster"),
+        ("protocol_view_traits_test.siox", "Spi"),
+        ("view_bus_test.siox", "StreamLink"),
+        ("uart_fsm_test.siox", "Uart"),
+        ("riscv_alu_test.siox", "Alu"),
+        ("riscv_decode_test.siox", "Decoder"),
+        ("namespaced_identity_test.siox", "DirectionProbe"),
+    ] {
+        let path = root.join(file);
+        let source = std::fs::read_to_string(&path).unwrap();
+        let uri = Url::from_file_path(&path).unwrap().to_string();
+        let compilation = compiler.compile(CompileRequest::new(
+            SourceInput::memory(&path, &source),
+            Emit::Metadata,
+        ));
+        assert!(
+            compilation.succeeded(),
+            "{file}: {}",
+            compilation.render_diagnostics()
+        );
+        let started = Instant::now();
+        let baseline = client.open(&uri, &source);
+        assert!(errors(&baseline).is_empty(), "{file}: {baseline}");
+        let open_time = started.elapsed();
+        let resolved = compilation.resolved.as_ref().unwrap();
+        let (index, declaration) = resolved
+            .defs()
+            .iter()
+            .enumerate()
+            .find(|(_, d)| {
+                d.name == name
+                    && d.span
+                        .is_some_and(|s| Some(s.file) == compilation.entry_file)
+            })
+            .expect(name);
+        let span = declaration.span.unwrap();
+        let id = siox::resolve::DefId(index as u32);
+        let usage = compilation
+            .entry_tokens
+            .iter()
+            .find(|t| resolved.resolved(t.span) == Some(id))
+            .unwrap_or_else(|| panic!("{file}: no resolved use of {name}"));
+        let params = position_params(&uri, &source, usage.span.start as usize);
+        let definition = json!({"uri":uri,"range":{"start":at(&source,span.start as usize),"end":at(&source,span.end as usize)}});
+        assert_eq!(
+            client.request("textDocument/definition", params.clone())["result"],
+            definition,
+            "{file}"
+        );
+        assert!(
+            client.request("textDocument/hover", params.clone())["result"]["contents"]["value"]
+                .as_str()
+                .unwrap()
+                .contains(name),
+            "{file}"
+        );
+        let mut refs_params = params.clone();
+        refs_params["context"] = json!({"includeDeclaration":true});
+        let refs = client.request("textDocument/references", refs_params);
+        let refs = refs["result"].as_array().unwrap();
+        assert!(
+            refs.contains(&definition),
+            "{file}: missing declaration reference"
+        );
+        assert!(
+            refs.iter()
+                .any(|r| r["range"]["start"] == at(&source, usage.span.start as usize)),
+            "{file}: missing use reference"
+        );
+        assert!(
+            client.request("textDocument/documentHighlight", params)["result"]
+                .as_array()
+                .unwrap()
+                .len()
+                >= 2,
+            "{file}"
+        );
+        let external = compilation
+            .entry_tokens
+            .iter()
+            .find_map(|t| {
+                let d = resolved.def(resolved.resolved(t.span)?)?;
+                let span = d.span?;
+                (Some(span.file) != compilation.entry_file).then_some((t.span, span))
+            })
+            .unwrap_or_else(|| panic!("{file}: no external binding"));
+        let dependency = compilation.sources.get(external.1.file).unwrap();
+        assert_eq!(
+            client.request(
+                "textDocument/definition",
+                position_params(&uri, &source, external.0.start as usize)
+            )["result"],
+            json!({"uri":Url::from_file_path(&dependency.name).unwrap().to_string(),"range":{"start":at(&dependency.text,external.1.start as usize),"end":at(&dependency.text,external.1.end as usize)}}),
+            "{file}: external navigation"
+        );
+        let symbols = client.request(
+            "textDocument/documentSymbol",
+            json!({"textDocument":{"uri":uri}}),
+        );
+        assert!(
+            symbols["result"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|s| s["name"] == name),
+            "{file}"
+        );
+        let module_start = source.find("module ").unwrap();
+        let boundary = client.request(
+            "textDocument/completion",
+            position_params(&uri, &source, module_start),
+        );
+        if !boundary["result"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["label"] == "process")
+        {
+            eprintln!(
+                "completion limitation: {file}: no keywords at module start after leading comments"
+            );
+        }
+        let after_module = module_start + source[module_start..].find('\n').unwrap() + 1;
+        assert!(
+            client.request(
+                "textDocument/completion",
+                position_params(&uri, &source, after_module)
+            )["result"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|s| s["label"] == "process"),
+            "{file}"
+        );
+        assert_eq!(
+            client.request(
+                "textDocument/formatting",
+                json!({"textDocument":{"uri":uri},"options":{"tabSize":4,"insertSpaces":true}})
+            )["result"],
+            json!([]),
+            "{file}: comment-safe formatting"
+        );
+        client.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"range":{"start":at(&source,source.len()),"end":at(&source,source.len())},"text":"\nfn lsp_project_probe(value: __LspMissingProjectType) {}\n"}]}));
+        let broken = client.diagnostics_version(&uri, 2);
+        assert!(
+            errors(&broken).iter().any(|d| d["message"]
+                .as_str()
+                .unwrap()
+                .contains("__LspMissingProjectType")),
+            "{file}: {broken}"
+        );
+        client.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":uri,"version":3},"contentChanges":[{"text":source}]}),
+        );
+        let repaired = client.diagnostics_version(&uri, 3);
+        assert_eq!(
+            diagnostic_keys(&repaired),
+            diagnostic_keys(&baseline),
+            "{file}: repair"
+        );
+        eprintln!("{file}: navigation, hover, refs, outlines, completion, unsaved repair passed; warm open {open_time:?}");
+        opened.push((path, uri, source, baseline));
+    }
+    // A request drains queued publications before checking close isolation.
+    client.request(
+        "textDocument/documentSymbol",
+        json!({"textDocument":{"uri":opened[0].1}}),
+    );
+    client.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":opened[0].1}}),
+    );
+    assert_eq!(client.diagnostics(&opened[0].1)["diagnostics"], json!([]));
+    let last = opened.last().unwrap();
+    assert_eq!(
+        diagnostic_keys(&client.diagnostics_version(&last.1, 3)),
+        diagnostic_keys(&last.3)
+    );
+    for (path, uri, source, _) in &opened {
+        assert_eq!(std::fs::read_to_string(path).unwrap(), *source);
+        client.notify("textDocument/didClose", json!({"textDocument":{"uri":uri}}));
+    }
+    client.finish();
 }
 
 #[test]

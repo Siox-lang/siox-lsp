@@ -55,3 +55,46 @@ comment-preserving formatting and broader semantic queries as follow-ups.
 Editor packaging/testing is outside scope per the user's latest instruction.
 Only owned server, tests, dependency lock, docs and server-only CI are committed;
 no push without a fresh request. Compiler docs are reconciled separately.
+
+## 2026-10-06 — Codex — test the server on existing projects
+
+Own opt-in corpus/project tests in tests/stdio.rs, reusing its existing framed
+client. Use the actual sibling siox-tests checkout, not copied source projects.
+Check all entries against compiler metadata diagnostics, then exercise FIFO,
+SPI, SPI/I2C trait buses, views, UART, RISC-V ALU/decoder and the multi-file
+namespaced-identity design. Probe outlines, hover/navigation/references,
+comment-safe formatting, unsaved error/repair and simultaneous open buffers.
+Do not modify project files, production server/compiler code or editor clients.
+Run checks in bounded services and log findings before a test-only commit.
+
+## 2026-10-06 — Codex — real-project server test results
+
+Final guarded job siox-job-3000-1791321379313078361-3708534.service completed:
+SubState=exited, Result=success, ExecMainStatus=0, MemoryPeak=257298432 bytes.
+Passed 14 regular tests, both opt-in real-project tests, Clippy with warnings
+denied, fmt --check, and graphify AST-only update (137 nodes, 302 edges).
+The actual sibling corpus remains clean; no copied designs or on-disk edits.
+
+All 225 entry files matched the locked compiler's diagnostic codes/severities/
+ranges and supported outlines/close. 224 analyzed without errors. Metadata
+analysis of generic_standalone_test.siox reports E-P017 at the generic cast
+wide = unsigned[N](a). This is not a server-only false positive: the independent
+compiler metadata request produces it too. Earlier native corpus gate
+siox-job-3000-1791315097756155865-3634889.service ran this design successfully
+and passed all 225 entries. Track the analysis-path discrepancy upstream, not
+by discarding a compiler diagnostic in the adapter.
+
+FIFO, SPI, SPI/I2C trait buses, views, UART, RISC-V ALU/decoder and namespaced
+identity passed resolved local/external navigation, hover, references/highlights,
+outlines, ordinary code completion, comment-safe formatting, incremental unsaved
+error insertion/full repair and close isolation with eight buffers open. Final
+warm opens ranged 99–193 ms; corpus parity took about 57 seconds for two analyses
+per entry. UART additionally exposes a completion-context bug: a preceding
+comment ending in '.' suppresses keywords at the next module line. The test
+logs that known limitation separately; completion after the module works.
+
+README records reproduction and results; TODO records both findings. These
+are analysis/protocol checks, not new native simulation or editor testing.
+Production binary SHA256 is unchanged:
+fbe9f36cede97fb8549b8bb4f4564c94229bf76902a3886348c2b5c88e3d68fc.
+No compiler/server production edits or new dependencies; no push requested.
